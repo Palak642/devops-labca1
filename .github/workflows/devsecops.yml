@@ -37,13 +37,37 @@ jobs:
         if: ${{ always() && steps.dependencies.outcome == 'success' }}
         run: python -m bandit -q -r app -ll
 
-      - name: Scan for secrets with Gitleaks
+      - name: Install Gitleaks
+        id: install-gitleaks
         if: ${{ always() }}
-        uses: gitleaks/gitleaks-action@v3
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          release="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          archive="$RUNNER_TEMP/$asset"
+          checksums="$RUNNER_TEMP/gitleaks-checksums.txt"
+
+          curl --fail --location --silent --show-error "$release/$asset" --output "$archive"
+          curl --fail --location --silent --show-error \
+            "$release/gitleaks_${GITLEAKS_VERSION}_checksums.txt" --output "$checksums"
+
+          expected="$(awk -v asset="$asset" '$2 == asset { print $1; exit }' "$checksums")"
+          if [[ -z "$expected" ]]; then
+            echo "No published checksum found for $asset." >&2
+            exit 1
+          fi
+          printf '%s  %s\n' "$expected" "$archive" | sha256sum --check --status
+
+          install_dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir" gitleaks
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Scan Git history with Gitleaks
+        if: ${{ always() && steps.install-gitleaks.outcome == 'success' }}
+        run: gitleaks git . --redact --exit-code 1
 
       - name: Audit installed dependencies
         if: ${{ always() && steps.dependencies.outcome == 'success' }}

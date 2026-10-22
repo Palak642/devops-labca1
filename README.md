@@ -106,10 +106,12 @@ Install Gitleaks for the current project (Windows x64; downloads the official re
 This installs a local, ignored binary at `.tools\gitleaks.exe`; it does not change system `PATH`. The scanner demo automatically detects that binary. To scan the working tree directly with:
 
 ```powershell
-gitleaks dir . --no-banner --redact --exit-code 1
+.\.tools\gitleaks.exe git . --redact --exit-code 1
 ```
 
-The pipeline uses the Gitleaks GitHub Action. A finding produces a non-zero result; reports are redacted. Dependency audit requires access to the Python package advisory service.
+This scans committed Git history. Prefer it to `gitleaks dir .` from the project root: a directory scan may also inspect ignored local files such as `.venv` and the downloaded `.tools` binary, producing unrelated matches.
+
+The pipeline downloads a pinned Gitleaks CLI release, verifies its published SHA-256 checksum, and scans the checked-out Git history. This avoids relying on a push-event commit range whose base may be the initial commit (which has no parent). A detected finding produces a non-zero result, and output is redacted. Dependency audit requires access to the Python package advisory service.
 
 ### Safe scanner demonstrations
 
@@ -160,7 +162,7 @@ AI findings are model-generated examples only; actual findings depend on the dif
 The workflow at `.github/workflows/devsecops.yml` runs on every push, pull request, or manual dispatch:
 
 1. Checks out the repository and installs the development requirements.
-2. Runs pytest, Bandit (`-ll`), Gitleaks, and pip-audit. A failed test or scanner fails the quality-gate job.
+2. Runs pytest, Bandit (`-ll`), Gitleaks against Git history, and pip-audit. A failed test or scanner fails the quality-gate job.
 3. Runs AI review when configured; it is advisory and its report is uploaded as a short-lived artifact.
 4. Builds a Docker image only after all mandatory quality gates pass.
 5. Calls the optional deployment webhook only for a push to `main`, after a successful image build, with `DEPLOY_ENABLED` explicitly set to `true`.
@@ -183,7 +185,6 @@ Configure these repository/environment settings only if using the optional featu
 | `AI_API_KEY` | Actions secret | No | Enables the optional AI review |
 | `AI_API_URL` | Actions variable | No | HTTPS-compatible API endpoint; defaults to OpenAI |
 | `AI_MODEL` | Actions variable | No | Model name; defaults to `gpt-4o-mini` |
-| `GITLEAKS_LICENSE` | Actions secret | Only for organization-owned repositories | License required by Gitleaks Action for organization repositories; personal-account repositories do not require it |
 | `DEPLOY_ENABLED` | Actions variable | No | Must equal `true` to enable the deployment job |
 | `DEPLOY_WEBHOOK_URL` | `production` environment secret | If deployment enabled | HTTPS endpoint accepting a POST deployment notification |
 | `DEPLOY_WEBHOOK_TOKEN` | `production` environment secret | If deployment enabled | Bearer credential for the webhook |
