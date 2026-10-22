@@ -229,6 +229,8 @@ Then open `http://localhost:8000/health`. The image installs only runtime depend
 6. Restore valid source and show the checks pass, followed by the Docker build.
 7. Explain that deployment stays disabled by default; optionally demonstrate the webhook only with an approved test endpoint and explicitly configured environment secrets.
 
+For the exact Command Prompt order, new-repository setup, failure/recovery demonstration, and speaking script, see [PRESENTATION_RUNBOOK.md](./PRESENTATION_RUNBOOK.md).
+
 ## Scope and limitations
 
 This project is an educational baseline, not a complete production security program. AI redaction is best-effort, AI conclusions may be wrong, the sample endpoints are intentionally small, and deployment is an integration hook rather than a cloud deployment implementation. The current workspace may not have Docker, Gitleaks, or an AI credential installed/configured; those steps require the manual setup described above.
