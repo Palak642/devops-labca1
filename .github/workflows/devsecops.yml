@@ -1,0 +1,112 @@
+name: DevSecOps pipeline
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gates:
+    name: Tests and security gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install application and check dependencies
+        id: dependencies
+        run: python -m pip install --requirement requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m pytest -q
+
+      - name: Run Bandit
+        if: ${{ always() && steps.dependencies.outcome == 'success' }}
+        run: python -m bandit -q -r app -ll
+
+      - name: Scan for secrets with Gitleaks
+        if: ${{ always() }}
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+      - name: Audit installed dependencies
+        if: ${{ always() && steps.dependencies.outcome == 'success' }}
+        run: python -m pip_audit --requirement requirements.txt
+
+      - name: Generate optional AI review
+        if: ${{ always() && steps.setup-python.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_URL: ${{ vars.AI_API_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+        run: |
+          python tools/ai_review.py \
+            --base "${{ github.event.pull_request.base.sha || github.event.before }}"
+
+      - name: Upload AI review report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: advisory-ai-review
+          path: artifacts/ai-review.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+  docker-build:
+    name: Build container after quality gates
+    needs: quality-gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Build Docker image
+        run: docker build --tag devsecops-sample:${{ github.sha }} .
+
+  deploy:
+    name: Optional deployment webhook
+    needs: docker-build
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Notify configured deployment endpoint
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEPLOY_WEBHOOK_URL" || -z "$DEPLOY_WEBHOOK_TOKEN" ]]; then
+            echo "Deployment is enabled but its URL or bearer token is missing." >&2
+            exit 1
+          fi
+          python -c 'from urllib.parse import urlparse; import os,sys; u=urlparse(os.environ["DEPLOY_WEBHOOK_URL"]); sys.exit(0 if u.scheme == "https" and u.netloc else 1)' || {
+            echo "DEPLOY_WEBHOOK_URL must be an HTTPS URL." >&2
+            exit 1
+          }
+          payload="$(python -c 'import json,os; print(json.dumps({"repository":os.environ["GITHUB_REPOSITORY"],"commit":os.environ["GITHUB_SHA"]}))')"
+          curl --fail --silent --show-error --max-time 30 \
+            --request POST \
+            --header "Authorization: Bearer ${DEPLOY_WEBHOOK_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "$payload" \
+            "$DEPLOY_WEBHOOK_URL"
